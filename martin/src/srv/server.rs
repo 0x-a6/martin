@@ -154,7 +154,8 @@ pub fn new_server(config: SrvConfig, state: ServerState) -> MartinResult<(Server
     let factory = move || {
         let cors_middleware = Cors::default()
             .allow_any_origin()
-            .allowed_methods(vec!["GET"]);
+            .allowed_methods(vec!["GET"])
+            .allow_any_header();
 
         let app = App::new()
             .app_data(Data::new(state.tiles.clone()))

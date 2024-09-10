@@ -71,10 +71,16 @@ macro_rules! get_cached_value {
 }
 
 macro_rules! get_or_insert_cached_value {
-    ($cache: expr, $value_type: path, $make_item:expr, $make_key: expr) => {{
+    ($cache: expr, $value_type: path, $make_item:expr, $make_key: expr, $invalidate_cache: expr) => {{
         if let Some(cache) = $cache {
             let key = $make_key;
-            Ok(if let Some(data) = cache.get(&key).await {
+            Ok(if $invalidate_cache {
+                $crate::utils::cache::trace_cache!("INVALIDATE", cache, key);
+                cache.remove(&key).await;
+                let data = $make_item.await?;
+                cache.insert(key, $value_type(data.clone())).await;
+                data
+            } else if let Some(data) = cache.get(&key).await {
                 $crate::utils::cache::trace_cache!("HIT", cache, key);
                 $crate::utils::cache::from_cache_value!($value_type, data, key)
             } else {

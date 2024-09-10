@@ -1,4 +1,5 @@
 use actix_http::header::Quality;
+use actix_http::header::{HeaderName, HeaderValue};
 use actix_http::ContentEncoding;
 use actix_web::error::{ErrorBadRequest, ErrorNotAcceptable, ErrorNotFound};
 use actix_web::http::header::{
@@ -7,7 +8,7 @@ use actix_web::http::header::{
 use actix_web::web::{Data, Path, Query};
 use actix_web::{route, HttpMessage, HttpRequest, HttpResponse, Result as ActixResult};
 use futures::future::try_join_all;
-use log::trace;
+use log::{debug, trace};
 use martin_tile_utils::{
     decode_brotli, decode_gzip, encode_brotli, encode_gzip, Encoding, Format, TileCoord, TileInfo,
 };
@@ -27,7 +28,7 @@ static SUPPORTED_ENC: &[HeaderEnc] = &[
     HeaderEnc::identity(),
 ];
 
-#[derive(Deserialize, Clone)]
+#[derive(Deserialize, Clone, Debug)]
 pub struct TileRequest {
     source_ids: String,
     z: u8,
@@ -43,12 +44,15 @@ async fn get_tile(
     sources: Data<TileSources>,
     cache: Data<OptMainCache>,
 ) -> ActixResult<HttpResponse> {
+    debug!("Request: {:?}", req);
+    let maphq_custom_header: &'static str = "x-maphq-invalid-cache";
     let src = DynTileSource::new(
         sources.as_ref(),
         &path.source_ids,
         Some(path.z),
         req.query_string(),
         req.get_header::<AcceptEncoding>(),
+        req.headers().get(HeaderName::from_static(maphq_custom_header)),
         srv_config.preferred_encoding,
         cache.as_ref().as_ref(),
     )?;
@@ -67,6 +71,7 @@ pub struct DynTileSource<'a> {
     pub query_str: Option<&'a str>,
     pub query_obj: Option<UrlQuery>,
     pub accept_enc: Option<AcceptEncoding>,
+    pub cache_invalid: Option<&'a HeaderValue>,
     pub preferred_enc: Option<PreferredEncoding>,
     pub cache: Option<&'a MainCache>,
 }
@@ -78,10 +83,12 @@ impl<'a> DynTileSource<'a> {
         zoom: Option<u8>,
         query: &'a str,
         accept_enc: Option<AcceptEncoding>,
+        cache_invalid: Option<&'a HeaderValue>,
         preferred_enc: Option<PreferredEncoding>,
         cache: Option<&'a MainCache>,
     ) -> ActixResult<Self> {
         let (sources, use_url_query, info) = sources.get_sources(source_ids, zoom)?;
+        debug!("Cache invalid: {:?}", cache_invalid);
 
         if sources.is_empty() {
             return Err(ErrorNotFound("No valid sources found"));
@@ -100,6 +107,7 @@ impl<'a> DynTileSource<'a> {
             query_str,
             query_obj,
             accept_enc,
+            cache_invalid,
             preferred_enc,
             cache,
         })
@@ -133,7 +141,8 @@ impl<'a> DynTileSource<'a> {
                     } else {
                         CacheKey::Tile(id, xyz)
                     }
-                }
+                },
+                self.cache_invalid.is_some()
             )
         }))
         .await
@@ -336,6 +345,7 @@ mod tests {
             None,
             "",
             accept_enc,
+            None,
             preferred_enc,
             None,
         )
@@ -373,7 +383,7 @@ mod tests {
             ("empty,non-empty", vec![1_u8, 2, 3]),
             ("empty,non-empty,empty", vec![1_u8, 2, 3]),
         ] {
-            let src = DynTileSource::new(&sources, source_id, None, "", None, None, None).unwrap();
+            let src = DynTileSource::new(&sources, source_id, None, "", None, None, None, None).unwrap();
             let xyz = TileCoord { z: 0, x: 0, y: 0 };
             assert_eq!(expected, &src.get_tile_content(xyz).await.unwrap().data);
         }
